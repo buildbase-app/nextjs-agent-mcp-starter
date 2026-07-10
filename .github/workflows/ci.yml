@@ -1,0 +1,29 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    env:
+      # Placeholder values so the env fail-fast check and build-time page
+      # rendering pass; no network calls to BuildBase happen during build.
+      NEXT_PUBLIC_BUILDBASE_SERVER_URL: https://api.console.buildbase.app
+      NEXT_PUBLIC_BUILDBASE_ORG_ID: 0123456789abcdef01234567
+      NEXT_PUBLIC_SITE_URL: https://example.com
+      BUILDBASE_AGENT_CLIENT_SECRET: ci-placeholder
+      SYSTEM_SECRET: ci-placeholder-secret
+      SECURITY_CONTACT_EMAIL: security@example.com
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run build
+      - run: npx tsc --noEmit
