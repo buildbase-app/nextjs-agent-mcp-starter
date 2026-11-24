@@ -1,4 +1,10 @@
-import { createAgentStack, defineMcpTool } from '@buildbase/sdk/mcp';
+import sdkPackage from '@buildbase/sdk/package.json';
+import {
+  BUILTIN_WRITE_TOOL_SCOPES,
+  createAgentStack,
+  defineMcpTool,
+  type BuiltinMcpToolName,
+} from '@buildbase/sdk/mcp';
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 
@@ -83,6 +89,73 @@ function ownedProject(id: string, owner: string): Project {
   return p;
 }
 
+// ---------------------------------------------------------------------------
+// Built-in BuildBase tools exposed over MCP: 42 of the SDK's built-ins (82 in
+// SDK 1.9.0), the workspace, member, profile, plan, subscription, invoice,
+// quota, usage, credit, feature-flag, permission, settings and notification
+// tools, listed explicitly so narrowing is just deleting lines. The ones left
+// out are the person's own plan, add-ons, credit holds and commerce
+// (node_modules/@buildbase/sdk/agents/mcp.md lists them all). Every call
+// runs under the granting user's session: an agent can never exceed its
+// user's permissions. For production, prune this list to exactly what your
+// product wants agents to do (or use builtinTools: 'readonly' for reads only).
+// ---------------------------------------------------------------------------
+const BUILTIN_TOOLS: BuiltinMcpToolName[] = [
+  // ── Reads: workspace & users ────────────────────────────────────────
+  'list_workspaces', 'get_workspace', 'list_workspace_users',
+  'get_user_profile',
+  // ── Reads: billing & plans ──────────────────────────────────────────
+  'get_subscription', 'get_plans', 'get_plan_versions',
+  'get_plan_version', 'get_public_plans', 'list_invoices',
+  'get_invoice',
+  // ── Reads: quota & usage ────────────────────────────────────────────
+  'get_quota_usage', 'get_all_quota_usage', 'get_usage_logs',
+  // ── Reads: credits ──────────────────────────────────────────────────
+  'get_credit_balance', 'list_credit_transactions',
+  'get_credit_packages', 'get_credit_buckets', 'get_expiring_credits',
+  'get_public_credit_packages',
+  // ── Reads: features, permissions, settings ──────────────────────────
+  'check_feature_flag', 'check_permission', 'resolve_permissions',
+  'get_settings',
+  // ── Writes: workspace & members ─────────────────────────────────────
+  'create_workspace', 'update_workspace',
+  'invite_workspace_user', 'update_workspace_user_role',
+  'update_user_profile',
+  // ── Writes: usage, credits, notifications ───────────────────────────
+  'record_usage', 'record_usage_batch', 'consume_credits',
+  'purchase_credits', 'send_notification',
+  // ── Writes: billing ─────────────────────────────────────────────────
+  'create_subscription_checkout', 'update_subscription',
+  'resume_subscription', 'get_billing_portal_url',
+  // ── Destructive: remove these first when narrowing ──────────────────
+  'delete_workspace', 'remove_workspace_user', 'cancel_subscription',
+  'update_feature_flag',
+];
+
+// ---------------------------------------------------------------------------
+// OAuth scope catalog. Each built-in write needs its area's write scope
+// (BUILTIN_WRITE_TOOL_SCOPES) from the agent's token; a token without it is
+// refused after a 30-day grace window. The catalog becomes scopes_supported
+// in the protected-resource metadata, so an agent asks for these scopes when
+// it connects and the user sees the descriptions on the consent screen. It is
+// derived from BUILTIN_TOOLS, so deleting a tool above also stops asking for
+// a scope nothing needs.
+// ---------------------------------------------------------------------------
+const WRITE_SCOPE_DESCRIPTIONS: Record<string, string> = {
+  'workspaces:write': 'Create, change and delete your workspaces and their members',
+  'profile:write': 'Update your profile',
+  'usage:write': 'Record usage against your workspace quotas',
+  'credits:write': 'Spend credits from your balance',
+  'billing:write': 'Change plans and subscriptions, open the billing portal and buy credits',
+  'notifications:write': 'Send notifications',
+  'features:write': 'Change feature flags',
+  'commerce:write': 'Check out, change item subscriptions and bookings, fulfil and refund sales',
+};
+const writeScopes: Partial<Record<string, string>> = BUILTIN_WRITE_TOOL_SCOPES;
+const scopes = [
+  ...new Set(BUILTIN_TOOLS.flatMap((name) => writeScopes[name] ?? [])),
+].map((name) => ({ name, description: WRITE_SCOPE_DESCRIPTIONS[name] ?? name }));
+
 // One config → MCP server + full agent-discovery surface.
 // Derived: MCP endpoint, server card, RFC 9728 protected-resource metadata,
 // API catalog, token verification (HS256 + encrypted sid), CORS, Link header.
@@ -96,48 +169,12 @@ export const agent = createAgentStack({
       'Next.js starter on @buildbase/sdk with a live MCP server and agent discovery.',
   },
   secret: process.env.SYSTEM_SECRET!,
+  scopes,
   mcp: {
     // Serve at /mcp so the endpoint URL equals the canonical RFC 9728
     // resource (<host>/mcp) — MCP clients reject a mismatch.
     path: '/mcp',
-    // The COMPLETE catalog of built-in tools (all 42), listed explicitly so
-    // narrowing is just deleting lines. Every call runs under the granting
-    // user's session — an agent can never exceed its user's permissions.
-    // For production, prune this list to exactly what your product wants
-    // agents to do (or use 'readonly' for reads only).
-    builtinTools: {
-      include: [
-        // ── Reads: workspace & users ────────────────────────────────────
-        'list_workspaces', 'get_workspace', 'list_workspace_users',
-        'get_user_profile',
-        // ── Reads: billing & plans ──────────────────────────────────────
-        'get_subscription', 'get_plans', 'get_plan_versions',
-        'get_plan_version', 'get_public_plans', 'list_invoices',
-        'get_invoice',
-        // ── Reads: quota & usage ────────────────────────────────────────
-        'get_quota_usage', 'get_all_quota_usage', 'get_usage_logs',
-        // ── Reads: credits ──────────────────────────────────────────────
-        'get_credit_balance', 'list_credit_transactions',
-        'get_credit_packages', 'get_credit_buckets', 'get_expiring_credits',
-        'get_public_credit_packages',
-        // ── Reads: features, permissions, settings ──────────────────────
-        'check_feature_flag', 'check_permission', 'resolve_permissions',
-        'get_settings',
-        // ── Writes: workspace & members ─────────────────────────────────
-        'create_workspace', 'update_workspace',
-        'invite_workspace_user', 'update_workspace_user_role',
-        'update_user_profile',
-        // ── Writes: usage, credits, notifications ───────────────────────
-        'record_usage', 'record_usage_batch', 'consume_credits',
-        'purchase_credits', 'send_notification',
-        // ── Writes: billing ─────────────────────────────────────────────
-        'create_subscription_checkout', 'update_subscription',
-        'resume_subscription', 'get_billing_portal_url',
-        // ── Destructive — remove these first when narrowing ─────────────
-        'delete_workspace', 'remove_workspace_user', 'cancel_subscription',
-        'update_feature_flag',
-      ],
-    },
+    builtinTools: { include: BUILTIN_TOOLS },
     // Production hardening. maxRequestBytes defaults to 1 MiB (413 above it);
     // CORS defaults to * which is safe for a Bearer-token API. Add
     // allowedOrigins: ['https://…'] if browser-based MCP clients must be
@@ -163,7 +200,7 @@ export const agent = createAgentStack({
         execute: async () => ({
           status: 'ok',
           app: 'nextjs-agent-mcp-starter',
-          sdk: '0.0.54',
+          sdk: sdkPackage.version,
         }),
       }),
 
