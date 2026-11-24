@@ -1,14 +1,14 @@
 # BuildBase Agent MCP Starter (`nextjs-agent-mcp-starter`)
 
-![Node.js](https://img.shields.io/badge/node-22+-brightgreen) ![Next.js](https://img.shields.io/badge/Next.js-16-black) ![TypeScript](https://img.shields.io/badge/TypeScript-5-blue) ![MCP](https://img.shields.io/badge/MCP-2025--06--18-purple) ![License](https://img.shields.io/badge/license-MIT-green)
+![Node.js](https://img.shields.io/badge/node-22+-brightgreen) ![Next.js](https://img.shields.io/badge/Next.js-16-black) ![TypeScript](https://img.shields.io/badge/TypeScript-5-blue) ![MCP](https://img.shields.io/badge/MCP-2026--07--28-purple) ![License](https://img.shields.io/badge/license-MIT-green)
 
-Next.js 16 (App Router) + [`@buildbase/sdk`](https://www.npmjs.com/package/@buildbase/sdk) ≥ 0.0.54 starter for an **agent-first app**: a live MCP server with BuildBase-powered agent OAuth and the full agent-discovery surface, all from one `createAgentStack()` config.
+Next.js 16 (App Router) + [`@buildbase/sdk`](https://www.npmjs.com/package/@buildbase/sdk) 1.9.0 (`^1.9.0`) starter for an **agent-first app**: a live MCP server with BuildBase-powered agent OAuth and the full agent-discovery surface, all from one `createAgentStack()` config.
 
 > **Important:** This starter requires a [BuildBase](https://buildbase.app) account with an OAuth2 agent client and Agent Readiness enabled. Without it, agents cannot authenticate.
 
 **Agent auth only.** There is no app-side login UI — users authenticate on BuildBase's hosted login + consent screen during the agent's OAuth flow. (For human sign-in wiring, see the `nextjs-starter` reference app.)
 
-Verified end-to-end with Claude Code as the MCP client: discovery → dynamic client registration → consent → token mint → 31 tools, including writes.
+Verified end-to-end with Claude Code as the MCP client on SDK 0.0.54: discovery → dynamic client registration → consent → token mint → 31 tools, including writes. The move to SDK 1.9.0 was checked with lint, typecheck, build and local requests to the built app (discovery documents, the 401 challenge, `tools/list` and `app_health` with a locally minted token), not yet with a live agent sign-in.
 
 ## Setup
 
@@ -45,7 +45,7 @@ Verified end-to-end with Claude Code as the MCP client: discovery → dynamic cl
 |---|---|
 | `src/lib/agent.ts` | `createAgentStack()` — one config for MCP + discovery + custom tools |
 | `src/lib/buildbase.ts` | Minimal `BuildBase()` factory (`withSession` for per-request sessions) |
-| `src/app/mcp/route.ts` | Live MCP server (streamable HTTP, MCP 2025-06-18). Served at `/mcp` so the endpoint equals the canonical RFC 9728 resource — MCP clients reject a mismatch, so don't move it to `/api/mcp`. |
+| `src/app/mcp/[[...card]]/route.ts` | Live MCP server (streamable HTTP, MCP 2026-07-28 and 2025-11-25, older clients negotiated down) and its SEP-2127 server card at `/mcp/server-card`, the one the AI Catalog and API catalog point at. Served at `/mcp` so the endpoint equals the canonical RFC 9728 resource (MCP clients reject a mismatch), so don't move it to `/api/mcp`. The optional catch-all is what lets the same route answer the card. |
 | `src/app/.well-known/[...path]/route.ts` | All `.well-known/*` discovery docs |
 | `src/app/{llms.txt,auth.md,robots.txt,security.txt,sitemap.xml}/route.ts` | Root discovery docs |
 | `src/app/api/agent/token/route.ts` | Platform-called token mint (`handleAppTokenRequest` + `mintAgentToken`) |
@@ -54,11 +54,13 @@ Verified end-to-end with Claude Code as the MCP client: discovery → dynamic cl
 
 ## Tools exposed (48)
 
-- **42 BuildBase built-in tools** — the complete catalog, listed explicitly in `builtinTools.include` (grouped by category in `src/lib/agent.ts`): every read (workspaces, users, subscription, plans, invoices, quota, usage logs, credits, feature flags, permissions, settings) **and every write**, including destructive operations (`delete_workspace`, `cancel_subscription`, `remove_workspace_user`, …). Narrowing the surface is just deleting lines.
+- **42 BuildBase built-in tools** (of the SDK's 82 in 1.9.0), listed explicitly in `BUILTIN_TOOLS` (grouped by category in `src/lib/agent.ts`): the reads (workspaces, users, subscription, plans, invoices, quota, usage logs, credits, feature flags, permissions, settings) **and the writes** for the same areas, including destructive operations (`delete_workspace`, `cancel_subscription`, `remove_workspace_user`, …). The built-ins left out are the person's own plan, add-ons, credit holds and commerce; `node_modules/@buildbase/sdk/agents/mcp.md` lists them. Narrowing the surface is just deleting lines.
 - **`app_health`** — minimal custom-tool example.
 - **5 project CRUD tools** (`create/list/get/update/delete_project`) — a complete custom-tool example with zod schemas, annotations, and per-user ownership scoping via `ctx.auth.userId`.
 
-This starter deliberately exposes the full surface to demonstrate capability. **For production, narrow it**: `builtinTools: 'readonly'` (least privilege) or `{ include: [...] }` / `{ exclude: [...] }` with exactly the operations you want agents to perform. Whatever you expose, every call runs under the granting user's session — an agent can never exceed its user's permissions.
+This starter deliberately exposes a wide surface to demonstrate capability. **For production, narrow it**: `builtinTools: 'readonly'` (least privilege) or `{ include: [...] }` / `{ exclude: [...] }` with exactly the operations you want agents to perform. Whatever you expose, every call runs under the granting user's session: an agent can never exceed its user's permissions.
+
+**Write scopes.** Since SDK 1.2.0 each built-in write needs its area's write scope on the agent's token (`workspaces:write`, `profile:write`, `usage:write`, `credits:write`, `billing:write`, `notifications:write`, `features:write`). `src/lib/agent.ts` derives the scope catalog from `BUILTIN_TOOLS`, so the protected-resource metadata lists exactly the scopes the exposed writes need, an agent asks for them when it connects, and the user sees each one on the consent screen. A token granted without one keeps working for 30 days from the first call this server sees without it (each result carries a deprecation notice), then that write is refused; reconnecting the agent grants the scopes. The window is kept in process memory, so pass the SDK's `builtinScopeGraceStore` a shared store when you run more than one instance.
 
 > ⚠️ The project tools use an **in-memory demo store**: it resets on every server restart and is not shared across serverless instances. Swap `projectStore` in `src/lib/agent.ts` for your real database; the tool logic stays the same.
 
@@ -78,6 +80,6 @@ Every tool runs under the granting user's BuildBase session — an agent can nev
 
 - Deploy behind a real domain; update `NEXT_PUBLIC_SITE_URL` + the console client URLs (Token/Revoke/Profile).
 - Replace the demo project store with a database.
-- Prune the `builtinTools.include` list — start by removing the "Destructive" group.
+- Prune the `BUILTIN_TOOLS` list in `src/lib/agent.ts`: start by removing the "Destructive" group.
 - If browser-based MCP clients must be restricted, set `allowedOrigins` in `mcp.handler`.
 - Point `onError` at your real telemetry instead of `console.error`.
